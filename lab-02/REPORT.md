@@ -77,10 +77,10 @@ ORDER BY category ASC, active ASC;
 ```
  category | active
 ----------+--------
-        7 | f
-        7 | t
-        8 | f
-        8 | t
+        7 | false
+        7 | true
+        8 | false
+        8 | true
 (42 rows)
 ```
 
