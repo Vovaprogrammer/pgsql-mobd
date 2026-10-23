@@ -104,3 +104,52 @@ WHERE EXISTS (SELECT 1
                 AND o.status = 'cancelled')
 ORDER BY u.id ASC
 LIMIT 10;
+
+-- Пункт 6.1. CTE: разбиение сложного запроса на шаги.
+-- Назначение: выручка каждой категории и её доля (в %) в общей выручке
+-- площадки (без отменённых заказов).
+-- Шаг 1 (category_revenue) — выручка по категориям;
+-- шаг 2 (total) — общая выручка как сумма результатов шага 1;
+-- основной запрос — доля категории = выручка категории / общая выручка.
+WITH category_revenue AS (
+    SELECT
+        p.category_id,
+        SUM(oi.quantity * oi.unit_price) AS revenue
+    FROM order_items AS oi
+    JOIN orders   AS o ON o.id = oi.order_id
+    JOIN products AS p ON p.id = oi.product_id
+    WHERE o.status <> 'cancelled'
+    GROUP BY p.category_id
+),
+total AS (
+    SELECT SUM(revenue) AS total_revenue
+    FROM category_revenue
+)
+SELECT
+    c.name                                       AS category,
+    cr.revenue,
+    ROUND(100 * cr.revenue / t.total_revenue, 2) AS share_percent
+FROM category_revenue AS cr
+JOIN categories AS c ON c.id = cr.category_id
+CROSS JOIN total AS t
+ORDER BY cr.revenue DESC
+LIMIT 10;
+
+-- Пункт 6.2. Рекурсивный CTE: обход дерева категорий.
+-- Назначение: всё поддерево категории «Электроника» (id = 1) с уровнем
+-- вложенности и полным путём от корня.
+-- Опорная часть — сама категория 1; рекурсивная часть на каждом шаге
+-- добавляет детей уже найденных категорий (c.parent_id = s.id), пока
+-- новые строки не перестанут появляться.
+WITH RECURSIVE subtree AS (
+    SELECT id, parent_id, name, 1 AS level, name AS path
+    FROM categories
+    WHERE id = 1
+    UNION ALL
+    SELECT c.id, c.parent_id, c.name, s.level + 1, s.path || ' > ' || c.name
+    FROM categories AS c
+    JOIN subtree AS s ON c.parent_id = s.id
+)
+SELECT id, parent_id, level, path
+FROM subtree
+ORDER BY path;
