@@ -44,3 +44,21 @@ FROM categories AS c
 JOIN products AS p ON p.category_id = c.id
 GROUP BY c.id, c.name
 ORDER BY avg_price DESC;
+
+-- Пункт 4. HAVING: фильтрация групп по результату агрегации.
+-- Назначение: продавцы с выручкой больше 15 млн руб. Выручка — сумма
+-- (количество * цена на момент покупки) по позициям неотменённых заказов.
+-- WHERE отбрасывает строки отменённых заказов до группировки,
+-- HAVING отбирает продавцов по сумме уже после группировки.
+SELECT
+    s.id,
+    s.store_name                     AS seller,
+    SUM(oi.quantity * oi.unit_price) AS revenue
+FROM sellers AS s
+JOIN products    AS p  ON p.seller_id = s.id
+JOIN order_items AS oi ON oi.product_id = p.id
+JOIN orders      AS o  ON o.id = oi.order_id
+WHERE o.status <> 'cancelled'
+GROUP BY s.id, s.store_name
+HAVING SUM(oi.quantity * oi.unit_price) > 15000000
+ORDER BY revenue DESC;
