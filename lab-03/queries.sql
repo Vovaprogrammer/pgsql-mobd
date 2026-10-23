@@ -19,3 +19,16 @@ JOIN sellers    AS s ON s.id = p.seller_id
 WHERE p.is_active = TRUE
 ORDER BY p.id ASC
 LIMIT 10;
+
+-- Пункт 2. LEFT JOIN: строки без соответствия в связанной таблице.
+-- Назначение: товары вместе с их отзывами. LEFT JOIN сохраняет все товары;
+-- у товара без отзывов столбцы reviews заполняются NULL.
+SELECT
+    p.id,
+    p.title,
+    p.price,
+    r.id AS review_id
+FROM products AS p
+LEFT JOIN reviews AS r ON r.product_id = p.id
+ORDER BY p.id ASC
+LIMIT 10;
