@@ -32,3 +32,15 @@ FROM products AS p
 LEFT JOIN reviews AS r ON r.product_id = p.id
 ORDER BY p.id ASC
 LIMIT 10;
+
+-- Пункт 3. Группировка и агрегация.
+-- Назначение: по каждой категории — количество товаров и средняя цена.
+SELECT
+    c.id,
+    c.name                 AS category,
+    COUNT(*)               AS products_count,
+    ROUND(AVG(p.price), 2) AS avg_price
+FROM categories AS c
+JOIN products AS p ON p.category_id = c.id
+GROUP BY c.id, c.name
+ORDER BY avg_price DESC;
