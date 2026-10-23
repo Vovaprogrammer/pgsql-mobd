@@ -62,3 +62,45 @@ WHERE o.status <> 'cancelled'
 GROUP BY s.id, s.store_name
 HAVING SUM(oi.quantity * oi.unit_price) > 15000000
 ORDER BY revenue DESC;
+
+-- Пункт 5.1. Скалярный подзапрос (возвращает ровно одно значение).
+-- Назначение: товары дороже средней цены по всему каталогу; та же средняя
+-- цена выводится рядом в отдельном столбце для сравнения.
+SELECT
+    id,
+    title,
+    price,
+    (SELECT ROUND(AVG(price), 2) FROM products) AS avg_price
+FROM products
+WHERE price > (SELECT AVG(price) FROM products)
+ORDER BY id ASC
+LIMIT 10;
+
+-- Пункт 5.2. Подзапрос в предикате IN (возвращает множество значений).
+-- Назначение: товары из подкатегорий «Электроники» (категории, у которых
+-- parent_id = 1).
+SELECT
+    id,
+    title,
+    price,
+    category_id
+FROM products
+WHERE category_id IN (SELECT id FROM categories WHERE parent_id = 1)
+ORDER BY id ASC
+LIMIT 10;
+
+-- Пункт 5.3. Коррелированный подзапрос в предикате EXISTS.
+-- Назначение: покупатели, у которых есть хотя бы один отменённый заказ.
+-- Подзапрос ссылается на u.id внешнего запроса, поэтому логически
+-- вычисляется для каждого пользователя.
+SELECT
+    u.id,
+    u.full_name,
+    u.email
+FROM users AS u
+WHERE EXISTS (SELECT 1
+              FROM orders AS o
+              WHERE o.user_id = u.id
+                AND o.status = 'cancelled')
+ORDER BY u.id ASC
+LIMIT 10;
