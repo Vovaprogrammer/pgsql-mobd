@@ -191,3 +191,55 @@ ORDER BY day ASC;
 ```
 
 У первого дня нет предыдущего, поэтому `LAG` возвращает `NULL` и прирост не считается; у последнего дня так же `NULL` в `next_revenue`. Пропусков дат нет (продажи во все 366 дней), поэтому предыдущая строка — действительно предыдущий календарный день.
+
+## 6. Одна задача двумя способами: оконная функция и группировка
+
+Задача пункта 4 — доля продавца в выручке категории — решена без оконных функций. CTE `seller_category` даёт выручку пары «категория — продавец» (это та же группировка, что в пункте 4). CTE `category_total` группирует её ещё раз, по категории, и итог категории присоединяется к строкам продавцов через `JOIN` по `category_id`.
+
+```sql
+WITH seller_category AS (
+    SELECT
+        c.id                             AS category_id,
+        c.name                           AS category,
+        s.store_name                     AS seller,
+        SUM(oi.quantity * oi.unit_price) AS seller_revenue
+    FROM order_items AS oi
+    JOIN orders     AS o ON o.id = oi.order_id
+    JOIN products   AS p ON p.id = oi.product_id
+    JOIN categories AS c ON c.id = p.category_id
+    JOIN sellers    AS s ON s.id = p.seller_id
+    WHERE o.status <> 'cancelled'
+    GROUP BY c.id, c.name, s.id, s.store_name
+),
+category_total AS (
+    SELECT category_id, SUM(seller_revenue) AS category_revenue
+    FROM seller_category
+    GROUP BY category_id
+)
+SELECT
+    sc.category,
+    sc.seller,
+    sc.seller_revenue,
+    ct.category_revenue,
+    ROUND(100 * sc.seller_revenue / ct.category_revenue, 2) AS share_pct
+FROM seller_category AS sc
+JOIN category_total AS ct ON ct.category_id = sc.category_id
+ORDER BY sc.category ASC, share_pct DESC;
+```
+```
+         category          |     seller      | seller_revenue | category_revenue | share_pct
+---------------------------+-----------------+----------------+------------------+-----------
+ Беспроводные наушники     | ЛавкаМастера 39 |      351552.09 |       6882450.24 |      5.11
+ Беспроводные наушники     | ЗелёныйДвор 37  |      285595.06 |       6882450.24 |      4.15
+ Беспроводные наушники     | ДомАрт 1        |      276406.60 |       6882450.24 |      4.02
+ Беспроводные наушники     | ЛавкаМастера 7  |      265016.02 |       6882450.24 |      3.85
+ Беспроводные наушники     | ЛавкаМастера 31 |      244587.22 |       6882450.24 |      3.55
+(840 rows)
+```
+
+Результат совпадает с пунктом 4 построчно (проверено `EXCEPT ALL` в обе стороны — расхождений 0).
+
+Почему оконная функция здесь удобнее:
+
+- `GROUP BY` схлопывает строки, и одна группировка даёт только один уровень: либо продавцов, либо категории. Чтобы показать итог категории рядом с каждым продавцом, нужны вторая группировка и `JOIN` обратно к детальным строкам.
+- В оконном варианте итог категории — это одно выражение `SUM(SUM(...)) OVER (PARTITION BY c.id)` в том же запросе: строки продавцов сохраняются, вторая группировка и соединение не нужны. Запрос получается вдвое короче.

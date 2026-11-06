@@ -104,3 +104,37 @@ SELECT
 FROM daily
 WINDOW w AS (ORDER BY day)
 ORDER BY day ASC;
+
+-- Пункт 6. Задача пункта 4 (доля продавца в выручке категории) обычной
+-- группировкой, без оконных функций. Оконный вариант — пункт 4.
+-- seller_category — выручка пары «категория — продавец» (как GROUP BY в
+-- пункте 4); category_total — вторая группировка, по категории; затем
+-- итог категории присоединяется к строкам продавцов по category_id.
+WITH seller_category AS (
+    SELECT
+        c.id                             AS category_id,
+        c.name                           AS category,
+        s.store_name                     AS seller,
+        SUM(oi.quantity * oi.unit_price) AS seller_revenue
+    FROM order_items AS oi
+    JOIN orders     AS o ON o.id = oi.order_id
+    JOIN products   AS p ON p.id = oi.product_id
+    JOIN categories AS c ON c.id = p.category_id
+    JOIN sellers    AS s ON s.id = p.seller_id
+    WHERE o.status <> 'cancelled'
+    GROUP BY c.id, c.name, s.id, s.store_name
+),
+category_total AS (
+    SELECT category_id, SUM(seller_revenue) AS category_revenue
+    FROM seller_category
+    GROUP BY category_id
+)
+SELECT
+    sc.category,
+    sc.seller,
+    sc.seller_revenue,
+    ct.category_revenue,
+    ROUND(100 * sc.seller_revenue / ct.category_revenue, 2) AS share_pct
+FROM seller_category AS sc
+JOIN category_total AS ct ON ct.category_id = sc.category_id
+ORDER BY sc.category ASC, share_pct DESC;
