@@ -117,3 +117,38 @@ ORDER BY day ASC;
 ```
 
 На последний день `running_total` = 484066428.16 — это совпадает с общей выручкой по всем неотменённым заказам.
+
+## 4. Доля выручки продавца в выручке его категории
+
+`GROUP BY` по категории и продавцу даёт выручку продавца в категории (`seller_revenue`, без отменённых заказов). Оконный `SUM(SUM(...)) OVER (PARTITION BY c.id)` складывает выручку всех продавцов той же категории (`category_revenue`) и ставит её в каждую строку, не схлопывая их. Доля — частное этих двух сумм в процентах.
+
+```sql
+SELECT
+    c.name                                       AS category,
+    s.store_name                                 AS seller,
+    SUM(oi.quantity * oi.unit_price)             AS seller_revenue,
+    SUM(SUM(oi.quantity * oi.unit_price)) OVER w AS category_revenue,
+    ROUND(100 * SUM(oi.quantity * oi.unit_price)
+              / SUM(SUM(oi.quantity * oi.unit_price)) OVER w, 2) AS share_pct
+FROM order_items AS oi
+JOIN orders     AS o ON o.id = oi.order_id
+JOIN products   AS p ON p.id = oi.product_id
+JOIN categories AS c ON c.id = p.category_id
+JOIN sellers    AS s ON s.id = p.seller_id
+WHERE o.status <> 'cancelled'
+GROUP BY c.id, c.name, s.id, s.store_name
+WINDOW w AS (PARTITION BY c.id)
+ORDER BY category ASC, share_pct DESC;
+```
+```
+         category          |     seller      | seller_revenue | category_revenue | share_pct
+---------------------------+-----------------+----------------+------------------+-----------
+ Беспроводные наушники     | ЛавкаМастера 39 |      351552.09 |       6882450.24 |      5.11
+ Беспроводные наушники     | ЗелёныйДвор 37  |      285595.06 |       6882450.24 |      4.15
+ Беспроводные наушники     | ДомАрт 1        |      276406.60 |       6882450.24 |      4.02
+ Беспроводные наушники     | ЛавкаМастера 7  |      265016.02 |       6882450.24 |      3.85
+ Беспроводные наушники     | ЛавкаМастера 31 |      244587.22 |       6882450.24 |      3.55
+(840 rows)
+```
+
+Результат — 840 строк: каждый из 40 продавцов торгует в каждой из 21 категории. Внутри категории `category_revenue` одинакова во всех строках, а доли продавцов в сумме дают 100%.

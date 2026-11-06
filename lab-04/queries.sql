@@ -60,3 +60,23 @@ JOIN order_items AS oi ON oi.order_id = o.id
 WHERE o.status <> 'cancelled'
 GROUP BY o.created_at::date
 ORDER BY day ASC;
+
+-- Пункт 4. Доля выручки продавца в выручке его категории.
+-- GROUP BY даёт выручку пары «категория — продавец», оконный
+-- SUM(...) OVER (PARTITION BY c.id) — выручку всей категории рядом с ней.
+SELECT
+    c.name                                       AS category,
+    s.store_name                                 AS seller,
+    SUM(oi.quantity * oi.unit_price)             AS seller_revenue,
+    SUM(SUM(oi.quantity * oi.unit_price)) OVER w AS category_revenue,
+    ROUND(100 * SUM(oi.quantity * oi.unit_price)
+              / SUM(SUM(oi.quantity * oi.unit_price)) OVER w, 2) AS share_pct
+FROM order_items AS oi
+JOIN orders     AS o ON o.id = oi.order_id
+JOIN products   AS p ON p.id = oi.product_id
+JOIN categories AS c ON c.id = p.category_id
+JOIN sellers    AS s ON s.id = p.seller_id
+WHERE o.status <> 'cancelled'
+GROUP BY c.id, c.name, s.id, s.store_name
+WINDOW w AS (PARTITION BY c.id)
+ORDER BY category ASC, share_pct DESC;
