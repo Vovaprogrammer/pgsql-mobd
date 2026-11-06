@@ -86,3 +86,34 @@ ORDER BY category ASC, rn ASC;
 ```
 
 Результат — 63 строки: по три товара в каждой из 21 категории с товарами.
+
+## 3. Нарастающий итог выручки по дням
+
+`GROUP BY o.created_at::date` с внутренним `SUM` даёт выручку дня — сумму `quantity * unit_price` по позициям неотменённых заказов. Внешний `SUM(...) OVER` — оконная агрегатная функция над уже сгруппированными строками: рамка `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` складывает выручку всех дней от первого до текущего.
+
+```sql
+SELECT
+    o.created_at::date               AS day,
+    SUM(oi.quantity * oi.unit_price) AS day_revenue,
+    SUM(SUM(oi.quantity * oi.unit_price)) OVER (
+        ORDER BY o.created_at::date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                AS running_total
+FROM orders AS o
+JOIN order_items AS oi ON oi.order_id = o.id
+WHERE o.status <> 'cancelled'
+GROUP BY o.created_at::date
+ORDER BY day ASC;
+```
+```
+    day     | day_revenue | running_total
+------------+-------------+---------------
+ 2025-11-06 |  1147937.32 |    1147937.32
+ 2025-11-07 |  1060093.04 |    2208030.36
+ 2025-11-08 |  1175878.93 |    3383909.29
+ 2025-11-09 |  1704459.78 |    5088369.07
+ 2025-11-10 |   434972.40 |    5523341.47
+(366 rows)
+```
+
+На последний день `running_total` = 484066428.16 — это совпадает с общей выручкой по всем неотменённым заказам.

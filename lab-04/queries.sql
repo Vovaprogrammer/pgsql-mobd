@@ -43,3 +43,20 @@ SELECT category, id, title, price, rn
 FROM ranked
 WHERE rn <= 3
 ORDER BY category ASC, rn ASC;
+
+-- Пункт 3. Нарастающий итог выручки по дням.
+-- Выручка дня — сумма quantity * unit_price по позициям неотменённых
+-- заказов (GROUP BY по дате). Внешний SUM(...) OVER складывает выручку
+-- дней от первого до текущего.
+SELECT
+    o.created_at::date               AS day,
+    SUM(oi.quantity * oi.unit_price) AS day_revenue,
+    SUM(SUM(oi.quantity * oi.unit_price)) OVER (
+        ORDER BY o.created_at::date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                AS running_total
+FROM orders AS o
+JOIN order_items AS oi ON oi.order_id = o.id
+WHERE o.status <> 'cancelled'
+GROUP BY o.created_at::date
+ORDER BY day ASC;
