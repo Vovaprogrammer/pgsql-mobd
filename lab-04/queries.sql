@@ -80,3 +80,27 @@ WHERE o.status <> 'cancelled'
 GROUP BY c.id, c.name, s.id, s.store_name
 WINDOW w AS (PARTITION BY c.id)
 ORDER BY category ASC, share_pct DESC;
+
+-- Пункт 5. Сравнение выручки дня с предыдущим: LAG и LEAD.
+-- CTE daily — выручка по дням (как в пункте 3). LAG берёт выручку
+-- предыдущего дня, LEAD — следующего; прирост = текущий день − предыдущий.
+WITH daily AS (
+    SELECT
+        o.created_at::date               AS day,
+        SUM(oi.quantity * oi.unit_price) AS revenue
+    FROM orders AS o
+    JOIN order_items AS oi ON oi.order_id = o.id
+    WHERE o.status <> 'cancelled'
+    GROUP BY o.created_at::date
+)
+SELECT
+    day,
+    revenue,
+    LAG(revenue)  OVER w           AS prev_revenue,
+    LEAD(revenue) OVER w           AS next_revenue,
+    revenue - LAG(revenue) OVER w  AS growth,
+    ROUND(100 * (revenue - LAG(revenue) OVER w)
+              / LAG(revenue) OVER w, 2) AS growth_pct
+FROM daily
+WINDOW w AS (ORDER BY day)
+ORDER BY day ASC;
