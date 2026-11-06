@@ -23,3 +23,23 @@ WHERE c.name = 'Косметика'
 WINDOW w AS (PARTITION BY p.category_id ORDER BY p.price DESC)
 ORDER BY rn ASC
 LIMIT 10;
+
+-- Пункт 2. Три самых дорогих товара в каждой категории.
+-- В CTE товары нумеруются по убыванию цены внутри категории, во внешнем
+-- запросе остаются номера 1..3. Отфильтровать по rn в том же запросе
+-- нельзя: оконные функции вычисляются после WHERE.
+WITH ranked AS (
+    SELECT
+        c.name AS category,
+        p.id,
+        p.title,
+        p.price,
+        ROW_NUMBER() OVER (PARTITION BY p.category_id
+                           ORDER BY p.price DESC, p.id ASC) AS rn
+    FROM products AS p
+    JOIN categories AS c ON c.id = p.category_id
+)
+SELECT category, id, title, price, rn
+FROM ranked
+WHERE rn <= 3
+ORDER BY category ASC, rn ASC;
