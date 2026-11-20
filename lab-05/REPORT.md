@@ -170,3 +170,42 @@ SQL state: P0001
 ```
 
 До исключения функция успела создать заказ, добавить позицию с товаром 2 и списать его остаток, но всё это отменено: последним остался заказ 5003, остаток товара 2 по-прежнему 38.
+
+## 3. Функция сводного показателя: выручка продавца за период
+
+`seller_revenue_for_period` возвращает выручку продавца за период с `p_from` по `p_to` включительно — сумму `quantity * unit_price` по позициям неотменённых заказов с его товарами. Запрос внутри функции записывает результат в переменную `v_revenue` (`SELECT ... INTO`), функция возвращает её значение. В отличие от представления `seller_revenue` из ЛР 3, продавец и период передаются параметрами.
+
+```sql
+CREATE OR REPLACE FUNCTION seller_revenue_for_period(p_seller_id BIGINT,
+                                                     p_from      DATE,
+                                                     p_to        DATE)
+RETURNS NUMERIC AS $$
+DECLARE
+    v_revenue NUMERIC(12,2);
+BEGIN
+    SELECT COALESCE(SUM(oi.quantity * oi.unit_price), 0) INTO v_revenue
+    FROM order_items AS oi
+    JOIN orders      AS o ON o.id = oi.order_id
+    JOIN products    AS p ON p.id = oi.product_id
+    WHERE p.seller_id = p_seller_id
+      AND o.status <> 'cancelled'
+      AND o.created_at::date BETWEEN p_from AND p_to;
+
+    RETURN v_revenue;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+Выручка продавца 1 («ДомАрт 1») за январь 2026 года:
+
+```sql
+SELECT seller_revenue_for_period(1, '2026-01-01', '2026-01-31');
+```
+```
+ seller_revenue_for_period
+---------------------------
+                1134008.55
+(1 row)
+```
+
+`COALESCE` возвращает 0 вместо `NULL`, если продаж за период не было.
