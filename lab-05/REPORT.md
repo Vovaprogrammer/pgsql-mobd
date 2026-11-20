@@ -1,6 +1,6 @@
 # Лабораторная работа №5. Транзакции, целостность данных и серверная логика
 
-Скрипты выполняются в базе `marketplace`, созданной `schema.sql` (ЛР 1) и наполненной `seed.sql` (ЛР 2). Транзакция — в [`transaction.sql`](transaction.sql), функции — в [`functions.sql`](functions.sql).
+Скрипты выполняются в базе `marketplace`, созданной `schema.sql` (ЛР 1) и наполненной `seed.sql` (ЛР 2). Транзакция — в [`transaction.sql`](transaction.sql), функции — в [`functions.sql`](functions.sql), триггеры — в [`triggers.sql`](triggers.sql).
 
 ## 1. Транзакция: COMMIT и ROLLBACK
 
@@ -209,3 +209,52 @@ SELECT seller_revenue_for_period(1, '2026-01-01', '2026-01-31');
 ```
 
 `COALESCE` возвращает 0 вместо `NULL`, если продаж за период не было.
+
+## 4. Триггер аудита изменения цены
+
+Журнал `product_price_history` хранит товар, старую и новую цену и время изменения. Триггерная функция `log_price_change` добавляет в журнал строку: `OLD` — строка товара до изменения, `NEW` — после.
+
+```sql
+CREATE TABLE IF NOT EXISTS product_price_history (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id BIGINT        NOT NULL
+                   REFERENCES products(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    old_price  NUMERIC(12,2) NOT NULL,
+    new_price  NUMERIC(12,2) NOT NULL,
+    changed_at TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION log_price_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO product_price_history (product_id, old_price, new_price)
+    VALUES (NEW.id, OLD.price, NEW.price);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_log_price_change
+AFTER UPDATE OF price ON products
+FOR EACH ROW
+WHEN (OLD.price <> NEW.price)
+EXECUTE FUNCTION log_price_change();
+```
+
+Триггер срабатывает `AFTER` — после того как изменение строки выполнено, `UPDATE OF price` — только на `UPDATE`, затрагивающий столбец `price`, `FOR EACH ROW` — отдельно для каждой изменённой строки. Условие `WHEN` отсекает обновления, при которых цена осталась прежней.
+
+Проверка — одна команда поднимает цену двух товаров на 100 руб.:
+
+```sql
+UPDATE products SET price = price + 100 WHERE id IN (2, 5);
+
+SELECT * FROM product_price_history ORDER BY id;
+```
+```
+ id | product_id | old_price | new_price |          changed_at
+----+------------+-----------+-----------+-------------------------------
+  1 |          2 |   3350.00 |   3450.00 | 2026-11-20 13:07:17.783881+03
+  2 |          5 |    980.00 |   1080.00 | 2026-11-20 13:07:17.783881+03
+(2 rows)
+```
+
+Одна команда `UPDATE` изменила две строки, и триггер уровня строки записал в журнал две строки: старая и новая цена каждого товара попали туда автоматически.
