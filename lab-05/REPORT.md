@@ -258,3 +258,56 @@ SELECT * FROM product_price_history ORDER BY id;
 ```
 
 Одна команда `UPDATE` изменила две строки, и триггер уровня строки записал в журнал две строки: старая и новая цена каждого товара попали туда автоматически.
+
+## 5. Триггер, поддерживающий денормализованное поле
+
+В `products` добавлен столбец `rating` — средняя оценка товара по отзывам. Это денормализация: значение выводится из `reviews`, но хранится в `products`, чтобы не считать `AVG` при каждом показе товара. Сразу после добавления столбец заполняется по уже существующим отзывам (у товаров без отзывов — `NULL`), дальше его поддерживает триггер: после добавления отзыва функция `refresh_product_rating` пересчитывает рейтинг товара `NEW.product_id`.
+
+```sql
+ALTER TABLE products ADD COLUMN IF NOT EXISTS rating NUMERIC(3,2);
+
+UPDATE products AS p
+SET rating = (SELECT ROUND(AVG(r.score), 2)
+              FROM reviews AS r
+              WHERE r.product_id = p.id);
+
+CREATE OR REPLACE FUNCTION refresh_product_rating()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE products
+    SET rating = (SELECT ROUND(AVG(score), 2)
+                  FROM reviews
+                  WHERE product_id = NEW.product_id)
+    WHERE id = NEW.product_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_refresh_rating
+AFTER INSERT ON reviews
+FOR EACH ROW
+EXECUTE FUNCTION refresh_product_rating();
+```
+
+Проверка — у товара 10 два отзыва с оценкой 5; покупатель 189, купивший этот товар, оставляет отзыв с оценкой 2:
+
+```sql
+SELECT id, title, rating FROM products WHERE id = 10;
+
+INSERT INTO reviews (user_id, product_id, score) VALUES (189, 10, 2);
+
+SELECT id, title, rating FROM products WHERE id = 10;
+```
+```
+ id |        title        | rating
+----+---------------------+--------
+ 10 | Диван Kristal K-470 |   5.00
+(1 row)
+
+ id |        title        | rating
+----+---------------------+--------
+ 10 | Диван Kristal K-470 |   4.00
+(1 row)
+```
+
+Рейтинг пересчитан автоматически: (5 + 5 + 2) / 3 = 4.00.
