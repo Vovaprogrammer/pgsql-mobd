@@ -1,6 +1,6 @@
 # Лабораторная работа №5. Транзакции, целостность данных и серверная логика
 
-Скрипты выполняются в базе `marketplace`, созданной `schema.sql` (ЛР 1) и наполненной `seed.sql` (ЛР 2). Транзакция — в [`transaction.sql`](transaction.sql).
+Скрипты выполняются в базе `marketplace`, созданной `schema.sql` (ЛР 1) и наполненной `seed.sql` (ЛР 2). Транзакция — в [`transaction.sql`](transaction.sql), функции — в [`functions.sql`](functions.sql).
 
 ## 1. Транзакция: COMMIT и ROLLBACK
 
@@ -66,3 +66,107 @@ Detail: Failing row contains (13, -6, 2026-09-20 22:45:39.39531+03).
 ```
 
 После ошибки PostgreSQL не выполняет остальные команды транзакции, пока она не завершена; `ROLLBACK` отменяет и уже выполненные `INSERT`: число заказов и позиций и остаток те же, что после сценария 1.
+
+## 2. Функция атомарного оформления заказа
+
+`place_order` оформляет заказ из нескольких позиций: `p_product_ids[i]` и `p_quantities[i]` — товар и количество i-й позиции. Функция создаёт заказ, в цикле по позициям проверяет остаток, добавляет позицию по текущей цене товара и списывает остаток, затем записывает сумму заказа и возвращает его id.
+
+```sql
+CREATE OR REPLACE FUNCTION place_order(p_user_id     BIGINT,
+                                       p_product_ids BIGINT[],
+                                       p_quantities  INT[])
+RETURNS BIGINT AS $$
+DECLARE
+    v_order_id BIGINT;
+    v_price    NUMERIC(12,2);
+    v_stock    INT;
+BEGIN
+    INSERT INTO orders (user_id) VALUES (p_user_id) RETURNING id INTO v_order_id;
+
+    FOR i IN 1 .. array_length(p_product_ids, 1) LOOP
+        SELECT p.price, s.quantity INTO v_price, v_stock
+        FROM products AS p
+        JOIN stock    AS s ON s.product_id = p.id
+        WHERE p.id = p_product_ids[i];
+
+        IF v_stock < p_quantities[i] THEN
+            RAISE EXCEPTION 'Недостаточно товара % на складе: остаток %, заказано %',
+                p_product_ids[i], v_stock, p_quantities[i];
+        END IF;
+
+        INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+        VALUES (v_order_id, p_product_ids[i], p_quantities[i], v_price);
+
+        UPDATE stock SET quantity = quantity - p_quantities[i]
+        WHERE product_id = p_product_ids[i];
+    END LOOP;
+
+    UPDATE orders
+    SET total_amount = (SELECT SUM(quantity * unit_price)
+                        FROM order_items
+                        WHERE order_id = v_order_id)
+    WHERE id = v_order_id;
+
+    RETURN v_order_id;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+Вызов функции — одна команда, а каждая команда выполняется в транзакции. Поэтому `RAISE EXCEPTION` прерывает вызов и откатывает все изменения, сделанные функцией до этого момента, без явных `BEGIN` и `ROLLBACK`.
+
+Успешный вызов — 1 шт. товара 2 и 3 шт. товара 5 (остатки до вызова 39 и 54):
+
+```sql
+SELECT place_order(52, ARRAY[2, 5], ARRAY[1, 3]);
+```
+```
+ place_order
+-------------
+        5003
+(1 row)
+```
+
+Проверка — последний заказ, его позиции и остатки:
+
+```sql
+SELECT o.id, o.user_id, o.total_amount, oi.product_id, oi.quantity,
+       oi.unit_price, s.quantity AS stock_left
+FROM orders      AS o
+JOIN order_items AS oi ON oi.order_id = o.id
+JOIN stock       AS s  ON s.product_id = oi.product_id
+WHERE o.id = (SELECT max(id) FROM orders);
+```
+```
+  id  | user_id | total_amount | product_id | quantity | unit_price | stock_left
+------+---------+--------------+------------+----------+------------+------------
+ 5003 |      52 |      6290.00 |          2 |        1 |    3350.00 |         38
+ 5003 |      52 |      6290.00 |          5 |        3 |     980.00 |         51
+(2 rows)
+```
+
+Заказ создан с двумя позициями, сумма 3350 + 3 × 980 = 6290, остатки уменьшились на 1 и 3. Номер 5002 пропущен: его заняла отменённая транзакция из пункта 1, последовательность при откате не возвращает значения.
+
+Ошибочный вызов — товар 2 в наличии, а товара 13 заказано 10 шт. при остатке 4:
+
+```sql
+SELECT place_order(52, ARRAY[2, 13], ARRAY[1, 10]);
+```
+```
+ERROR:  Недостаточно товара 13 на складе: остаток 4, заказано 10
+CONTEXT:  функция PL/pgSQL place_order(bigint,bigint[],integer[]), строка 16, оператор RAISE 
+
+ОШИБКА:  Недостаточно товара 13 на складе: остаток 4, заказано 10
+SQL state: P0001
+```
+
+Проверка после ошибки:
+
+```
+  id  | user_id | total_amount | product_id | quantity | unit_price | stock_left
+------+---------+--------------+------------+----------+------------+------------
+ 5003 |      52 |      6290.00 |          2 |        1 |    3350.00 |         38
+ 5003 |      52 |      6290.00 |          5 |        3 |     980.00 |         51
+(2 rows)
+```
+
+До исключения функция успела создать заказ, добавить позицию с товаром 2 и списать его остаток, но всё это отменено: последним остался заказ 5003, остаток товара 2 по-прежнему 38.
