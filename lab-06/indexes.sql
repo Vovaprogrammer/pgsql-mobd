@@ -65,3 +65,24 @@ EXPLAIN ANALYZE
 SELECT id, title
 FROM products
 WHERE attributes @> '{"author": "М. Булгаков", "cover": "hard"}';
+
+-- Пункт 6. Цена индексов: массовая вставка 300 000 строк (товары каталога,
+-- повторённые 100 раз) в две копии структуры products. У первой индексов
+-- нет, у второй — те же, что у products, кроме первичного ключа (id в копиях
+-- повторяются).
+CREATE TABLE products_no_idx (LIKE products);
+CREATE TABLE products_idx    (LIKE products);
+CREATE INDEX ON products_idx (seller_id);
+CREATE INDEX ON products_idx (category_id);
+CREATE INDEX ON products_idx (price);
+CREATE INDEX ON products_idx USING GIN (attributes);
+
+EXPLAIN ANALYZE
+INSERT INTO products_no_idx
+SELECT p.* FROM products AS p CROSS JOIN generate_series(1, 100);
+
+EXPLAIN ANALYZE
+INSERT INTO products_idx
+SELECT p.* FROM products AS p CROSS JOIN generate_series(1, 100);
+
+DROP TABLE products_no_idx, products_idx;

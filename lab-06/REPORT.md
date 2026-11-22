@@ -283,3 +283,71 @@ Execution Time: 0.087 ms
 ```
 
 Условие с `@>` стало условием индекса (`Index Cond`). `Bitmap Index Scan` находит по GIN-индексу 43 товара и отмечает страницы таблицы, где они лежат, а `Bitmap Heap Scan` читает только эти 32 страницы. `Recheck Cond` — повторная проверка условия на прочитанных строках: GIN хранит ключи и значения по отдельности и может вернуть лишние строки, здесь их не оказалось. Прочитана 41 страница вместо 150, время сократилось с 0.467 до 0.087 мс.
+
+## 6. Обратная сторона индексов: массовая вставка
+
+Индексы ускоряют чтение, но каждую новую строку нужно добавить в каждый индекс таблицы. Для сравнения созданы две пустые копии структуры `products` (`LIKE` копирует столбцы без индексов и ограничений): у `products_no_idx` индексов нет, у `products_idx` — те же, что у `products`, кроме первичного ключа (`id` в копиях повторяются). В каждую одной командой вставляется 300 000 строк — товары каталога, повторённые 100 раз.
+
+```sql
+CREATE TABLE products_no_idx (LIKE products);
+CREATE TABLE products_idx    (LIKE products);
+CREATE INDEX ON products_idx (seller_id);
+CREATE INDEX ON products_idx (category_id);
+CREATE INDEX ON products_idx (price);
+CREATE INDEX ON products_idx USING GIN (attributes);
+
+EXPLAIN ANALYZE
+INSERT INTO products_no_idx
+SELECT p.* FROM products AS p CROSS JOIN generate_series(1, 100);
+
+EXPLAIN ANALYZE
+INSERT INTO products_idx
+SELECT p.* FROM products AS p CROSS JOIN generate_series(1, 100);
+
+DROP TABLE products_no_idx, products_idx;
+```
+
+Вставка в таблицу без индексов:
+
+```
+Insert on products_no_idx  (cost=0.00..3938.50 rows=0 width=0) (actual time=1001.484..1001.485 rows=0.00 loops=1)
+  Buffers: shared hit=321298 dirtied=8429 written=8431
+  ->  Nested Loop  (cost=0.00..3938.50 rows=300000 width=210) (actual time=0.026..54.490 rows=300000.00 loops=1)
+        Buffers: shared hit=150
+        ->  Function Scan on generate_series  (cost=0.00..1.00 rows=100 width=0) (actual time=0.012..0.092 rows=100.00 loops=1)
+        ->  Materialize  (cost=0.00..195.00 rows=3000 width=210) (actual time=0.000..0.112 rows=3000.00 loops=100)
+              Storage: Memory  Maximum Storage: 687kB
+              Buffers: shared hit=150
+              ->  Seq Scan on products p  (cost=0.00..180.00 rows=3000 width=210) (actual time=0.010..0.233 rows=3000.00 loops=1)
+                    Buffers: shared hit=150
+Planning:
+  Buffers: shared hit=26
+Planning Time: 0.146 ms
+Execution Time: 1001.579 ms
+```
+
+Вставка в таблицу с индексами:
+
+```
+Insert on products_idx  (cost=0.00..3938.50 rows=0 width=0) (actual time=3306.247..3306.248 rows=0.00 loops=1)
+  Buffers: shared hit=2935471 read=78 dirtied=10837 written=13022
+  ->  Nested Loop  (cost=0.00..3938.50 rows=300000 width=210) (actual time=0.024..68.138 rows=300000.00 loops=1)
+        Buffers: shared hit=150
+        ->  Function Scan on generate_series  (cost=0.00..1.00 rows=100 width=0) (actual time=0.008..0.073 rows=100.00 loops=1)
+        ->  Materialize  (cost=0.00..195.00 rows=3000 width=210) (actual time=0.000..0.156 rows=3000.00 loops=100)
+              Storage: Memory  Maximum Storage: 687kB
+              Buffers: shared hit=150
+              ->  Seq Scan on products p  (cost=0.00..180.00 rows=3000 width=210) (actual time=0.010..0.197 rows=3000.00 loops=1)
+                    Buffers: shared hit=150
+Planning Time: 0.083 ms
+Execution Time: 3306.343 ms
+```
+
+Планы одинаковы: `Nested Loop` за 54–68 мс составляет 300 000 строк из 100 значений `generate_series` и 3000 товаров (они прочитаны один раз и сохранены в памяти узлом `Materialize`), остальное время уходит на саму вставку (`Insert`). Оценочная стоимость тоже одинакова: планировщик не учитывает обновление индексов, разница видна только по фактическому времени и числу обращений к страницам.
+
+| Таблица | Время вставки | Обращений к страницам |
+|---|---|---|
+| `products_no_idx` (без индексов) | 1001.6 мс | 321 298 |
+| `products_idx` (4 индекса) | 3306.3 мс | 2 935 471 |
+
+С индексами вставка заняла в 3.3 раза больше времени, обращений к страницам — в 9 раз больше: для каждой строки нужно найти место в трёх B-tree-индексах и записать в GIN-индекс каждый ключ и значение из `attributes`.
