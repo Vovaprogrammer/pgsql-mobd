@@ -176,3 +176,64 @@ Execution Time: 0.207 ms
 ```
 
 Пользователи и их заказы читаются `Index Scan` в порядке `id` и `user_id` и сопоставляются `Merge Semi Join`. Индекс `idx_orders_user` не содержит статуса заказа, поэтому из 464 прочитанных заказов 440 отбрасываются фильтром `status = 'cancelled'`; на это уходит 467 обращений к страницам. Время выполнения — 0.207 мс.
+
+## 4. B-tree-индексы и сравнение планов
+
+Под каждый запрос добавлен свой индекс. `idx_products_price` хранит товары упорядоченными по цене. `idx_orders_cancelled_user` — частичный индекс: в него попадают только отменённые заказы, ключ — покупатель.
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_products_price ON products(price);
+
+CREATE INDEX IF NOT EXISTS idx_orders_cancelled_user ON orders(user_id)
+WHERE status = 'cancelled';
+```
+
+План запроса 1 после добавления индекса (текст запроса — в пункте 3):
+
+```
+Limit  (cost=0.73..3.53 rows=10 width=46) (actual time=0.033..0.035 rows=10.00 loops=1)
+  Buffers: shared hit=13
+  ->  Incremental Sort  (cost=0.73..772.07 rows=2753 width=46) (actual time=0.032..0.033 rows=10.00 loops=1)
+        Sort Key: price DESC, title
+        Presorted Key: price
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 26kB  Peak Memory: 26kB
+        Buffers: shared hit=13
+        ->  Index Scan Backward using idx_products_price on products  (cost=0.28..689.28 rows=2753 width=46) (actual time=0.013..0.021 rows=11.00 loops=1)
+              Filter: is_active
+              Index Searches: 1
+              Buffers: shared hit=13
+Planning Time: 0.111 ms
+Execution Time: 0.052 ms
+```
+
+`Index Scan Backward` читает индекс с конца, от самой высокой цены, поэтому строки сразу приходят упорядоченными по `price DESC`. `Incremental Sort` доупорядочивает по `title` только товары с одинаковой ценой (`Presorted Key: price`). Вместо 3000 строк прочитано 11: одиннадцатая нужна, чтобы убедиться, что у следующего товара цена уже другая.
+
+План запроса 2 после добавления индекса:
+
+```
+Limit  (cost=3.13..6.54 rows=10 width=52) (actual time=0.021..0.041 rows=10.00 loops=1)
+  Buffers: shared hit=6
+  ->  Merge Semi Join  (cost=3.13..88.29 rows=250 width=52) (actual time=0.021..0.039 rows=10.00 loops=1)
+        Merge Cond: (u.id = o.user_id)
+        Buffers: shared hit=6
+        ->  Index Scan using users_pkey on users u  (cost=0.28..62.28 rows=1200 width=52) (actual time=0.006..0.020 rows=143.00 loops=1)
+              Index Searches: 1
+              Buffers: shared hit=4
+        ->  Index Only Scan using idx_orders_cancelled_user on orders o  (cost=0.14..19.89 rows=250 width=8) (actual time=0.004..0.006 rows=24.00 loops=1)
+              Heap Fetches: 0
+              Index Searches: 1
+              Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=10
+Planning Time: 0.280 ms
+Execution Time: 0.056 ms
+```
+
+В частичном индексе только отменённые заказы, поэтому фильтр по статусу больше не нужен. `Index Only Scan` берёт `user_id` прямо из индекса, таблица `orders` не читается (`Heap Fetches: 0`): вместо 464 строк прочитано 24 записи индекса на 2 страницах.
+
+| Запрос | Сканирование до | Время до | Сканирование после | Время после |
+|---|---|---|---|---|
+| ЛР 2, п. 5 | `Seq Scan` + `Sort`: 3000 строк, 150 страниц | 0.641 мс | `Index Scan Backward` + `Incremental Sort`: 11 строк, 13 страниц | 0.052 мс |
+| ЛР 3, п. 5.3 | `Index Scan` с фильтром: 464 строки, 471 страница | 0.207 мс | `Index Only Scan`: 24 строки, 6 страниц | 0.056 мс |
+
+Планировщик выбрал новые планы, потому что их оценочная стоимость ниже: 239.52 → 3.53 и 28.57 → 6.54. Время сократилось примерно в 12 и в 4 раза.
