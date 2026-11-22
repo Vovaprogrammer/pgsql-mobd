@@ -58,3 +58,16 @@ lab-06/jsonb.sql             -- заполнение products.attributes
 | old_price | NUMERIC(12,2) | NOT NULL | цена до изменения |
 | new_price | NUMERIC(12,2) | NOT NULL | цена после изменения |
 | changed_at | TIMESTAMPTZ | NOT NULL, DEFAULT now() | дата изменения; запись добавляет триггер `trg_log_price_change` |
+
+## 3. Соответствие требованиям итогового проекта
+
+| № | Требование | Где выполнено |
+|---|---|---|
+| 1 | Схема в 3НФ со всеми ограничениями целостности, единый воспроизводимый DDL-скрипт | [`schema.sql`](schema.sql), раздел 1; бизнес-правила, ER-диаграмма, нормализация и ключи — [ЛР 1](../lab-01/REPORT.md), разделы 1–4 |
+| 2 | Согласованные данные в объёме для аналитики | [`seed.sql`](../lab-02/seed.sql): 1200 пользователей, 40 продавцов, 3000 товаров, 5000 заказов, 12 500 позиций заказов; [ЛР 2](../lab-02/REPORT.md), раздел 1 |
+| 3 | Запросы: многотабличные выборки, агрегация, подзапросы, CTE, оконные функции | выборка и фильтрация — [ЛР 2](../lab-02/REPORT.md), раздел 2 ([`queries.sql`](../lab-02/queries.sql)); соединения, группировка, подзапросы, CTE — [ЛР 3](../lab-03/REPORT.md), разделы 1–6 ([`queries.sql`](../lab-03/queries.sql)); оконные функции — [ЛР 4](../lab-04/REPORT.md) ([`queries.sql`](../lab-04/queries.sql)) |
+| 4 | Аналитические представления для типовых отчётов | `seller_revenue`, `product_rating` — [ЛР 3](../lab-03/REPORT.md), раздел 7 ([`views.sql`](../lab-03/views.sql)) |
+| 5 | Транзакционные функции на PL/pgSQL и триггеры | транзакция с `COMMIT` и `ROLLBACK`, функции `place_order` и `seller_revenue_for_period`, триггеры аудита цены и рейтинга — [ЛР 5](../lab-05/REPORT.md), разделы 1–5 ([`transaction.sql`](../lab-05/transaction.sql), [`functions.sql`](../lab-05/functions.sql), [`triggers.sql`](../lab-05/triggers.sql)); ошибочные сценарии — откат после нарушения `CHECK` (раздел 1) и нехватки товара в `place_order` (раздел 2) |
+| 6 | Характеристики товаров в JSONB и запросы к ним | [ЛР 6](../lab-06/REPORT.md), разделы 1–2 ([`jsonb.sql`](../lab-06/jsonb.sql)) |
+| 7 | Индексы по планам выполнения, эффект по `EXPLAIN ANALYZE` | [ЛР 6](../lab-06/REPORT.md), разделы 3–7 ([`indexes.sql`](../lab-06/indexes.sql)) |
+| 8 | Документация: описание схемы, словарь данных, перечень запросов, обоснование решений | описание схемы — [ЛР 1](../lab-01/REPORT.md) и [`ER_diagram.png`](../lab-01/ER_diagram.png); словарь — [`data_dictionary.md`](../lab-01/data_dictionary.md) и раздел 2; запросы с результатами — отчёты ЛР 2–6; обоснование — [ЛР 1](../lab-01/REPORT.md), разделы 3–5, [ЛР 5](../lab-05/REPORT.md), раздел 6, [ЛР 6](../lab-06/REPORT.md), раздел 7 |
