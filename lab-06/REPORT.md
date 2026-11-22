@@ -237,3 +237,49 @@ Execution Time: 0.056 ms
 | ЛР 3, п. 5.3 | `Index Scan` с фильтром: 464 строки, 471 страница | 0.207 мс | `Index Only Scan`: 24 строки, 6 страниц | 0.056 мс |
 
 Планировщик выбрал новые планы, потому что их оценочная стоимость ниже: 239.52 → 3.53 и 28.57 → 6.54. Время сократилось примерно в 12 и в 4 раза.
+
+## 5. GIN-индекс по JSONB
+
+B-tree сравнивает значения целиком и для оператора `@>` не подходит. GIN — инвертированный индекс: для каждого ключа и значения внутри документов он хранит список строк, где они встречаются. Запрос выбирает все товары с условием из пункта 2, без `ORDER BY id LIMIT 5`: с ним планировщику выгоднее идти по первичному ключу и остановиться на пятой найденной книге.
+
+План до создания индекса:
+
+```sql
+EXPLAIN ANALYZE
+SELECT id, title
+FROM products
+WHERE attributes @> '{"author": "М. Булгаков", "cover": "hard"}';
+```
+```
+Seq Scan on products  (cost=0.00..187.50 rows=44 width=41) (actual time=0.016..0.455 rows=43.00 loops=1)
+  Filter: (attributes @> '{"cover": "hard", "author": "М. Булгаков"}'::jsonb)
+  Rows Removed by Filter: 2957
+  Buffers: shared hit=150
+Planning Time: 0.098 ms
+Execution Time: 0.467 ms
+```
+
+`Seq Scan` проверяет условие у всех 3000 товаров (150 страниц) и отбрасывает 2957.
+
+Создание индекса и план того же запроса после него:
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_products_attributes ON products
+USING GIN (attributes);
+```
+```
+Bitmap Heap Scan on products  (cost=21.99..118.88 rows=44 width=41) (actual time=0.035..0.071 rows=43.00 loops=1)
+  Recheck Cond: (attributes @> '{"cover": "hard", "author": "М. Булгаков"}'::jsonb)
+  Heap Blocks: exact=32
+  Buffers: shared hit=41
+  ->  Bitmap Index Scan on idx_products_attributes  (cost=0.00..21.98 rows=44 width=0) (actual time=0.021..0.021 rows=43.00 loops=1)
+        Index Cond: (attributes @> '{"cover": "hard", "author": "М. Булгаков"}'::jsonb)
+        Index Searches: 1
+        Buffers: shared hit=9
+Planning:
+  Buffers: shared hit=1
+Planning Time: 0.100 ms
+Execution Time: 0.087 ms
+```
+
+Условие с `@>` стало условием индекса (`Index Cond`). `Bitmap Index Scan` находит по GIN-индексу 43 товара и отмечает страницы таблицы, где они лежат, а `Bitmap Heap Scan` читает только эти 32 страницы. `Recheck Cond` — повторная проверка условия на прочитанных строках: GIN хранит ключи и значения по отдельности и может вернуть лишние строки, здесь их не оказалось. Прочитана 41 страница вместо 150, время сократилось с 0.467 до 0.087 мс.

@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Лабораторная работа №6. Планы выполнения и индексы
--- Запускать в базе marketplace (после schema.sql и seed.sql).
+-- Запускать в базе marketplace (после schema.sql, seed.sql и jsonb.sql).
 -- =============================================================================
 
 -- Пункт 3. Планы «тяжёлых» запросов до добавления индексов.
@@ -50,3 +50,18 @@ WHERE EXISTS (SELECT 1
                 AND o.status = 'cancelled')
 ORDER BY u.id ASC
 LIMIT 10;
+
+-- Пункт 5. GIN-индекс по JSONB: запрос с @> (условие из пункта 2) до и
+-- после создания индекса.
+EXPLAIN ANALYZE
+SELECT id, title
+FROM products
+WHERE attributes @> '{"author": "М. Булгаков", "cover": "hard"}';
+
+CREATE INDEX IF NOT EXISTS idx_products_attributes ON products
+USING GIN (attributes);
+
+EXPLAIN ANALYZE
+SELECT id, title
+FROM products
+WHERE attributes @> '{"author": "М. Булгаков", "cover": "hard"}';
