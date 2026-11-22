@@ -1,6 +1,6 @@
 # Лабораторная работа №6. Современные возможности PostgreSQL и оптимизация запросов
 
-Скрипты выполняются в базе `marketplace`, созданной `schema.sql` (ЛР 1) и наполненной `seed.sql` (ЛР 2). Работа с JSONB — в [`jsonb.sql`](jsonb.sql).
+Скрипты выполняются в базе `marketplace`, созданной `schema.sql` (ЛР 1) и наполненной `seed.sql` (ЛР 2). Работа с JSONB — в [`jsonb.sql`](jsonb.sql), планы выполнения и индексы — в [`indexes.sql`](indexes.sql).
 
 ## 1. Столбец JSONB с характеристиками товара
 
@@ -106,3 +106,73 @@ LIMIT 5;
 ```
 
 В документах есть и ключ `pages`, которого нет во фрагменте: `@>` проверяет только пары фрагмента, остальные ключи документа не важны.
+
+## 3. Планы «тяжёлых» запросов
+
+Из предыдущих работ выбраны два запроса, которые читают намного больше строк, чем возвращают. Перед снятием планов команда `ANALYZE` обновляет статистику, на которую опирается планировщик.
+
+```sql
+ANALYZE;
+```
+
+Запрос 1 (ЛР 2, пункт 5) — десять самых дорогих активных товаров:
+
+```sql
+EXPLAIN ANALYZE
+SELECT id, title, price
+FROM products
+WHERE is_active = TRUE
+ORDER BY price DESC, title ASC
+LIMIT 10;
+```
+```
+Limit  (cost=239.49..239.52 rows=10 width=46) (actual time=0.628..0.629 rows=10.00 loops=1)
+  Buffers: shared hit=150
+  ->  Sort  (cost=239.49..246.37 rows=2753 width=46) (actual time=0.627..0.628 rows=10.00 loops=1)
+        Sort Key: price DESC, title
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=150
+        ->  Seq Scan on products  (cost=0.00..180.00 rows=2753 width=46) (actual time=0.014..0.303 rows=2753.00 loops=1)
+              Filter: is_active
+              Rows Removed by Filter: 247
+              Buffers: shared hit=150
+Planning Time: 0.124 ms
+Execution Time: 0.641 ms
+```
+
+`Seq Scan` читает все 3000 строк `products` (150 страниц) и отбрасывает 247 неактивных, затем `Sort` упорядочивает оставшиеся 2753 строки, чтобы вернуть 10. Время выполнения — 0.641 мс.
+
+Запрос 2 (ЛР 3, пункт 5.3) — покупатели, у которых есть отменённый заказ:
+
+```sql
+EXPLAIN ANALYZE
+SELECT u.id, u.full_name, u.email
+FROM users AS u
+WHERE EXISTS (SELECT 1
+              FROM orders AS o
+              WHERE o.user_id = u.id
+                AND o.status = 'cancelled')
+ORDER BY u.id ASC
+LIMIT 10;
+```
+```
+Limit  (cost=3.27..28.57 rows=10 width=52) (actual time=0.034..0.186 rows=10.00 loops=1)
+  Buffers: shared hit=471
+  ->  Merge Semi Join  (cost=3.27..635.69 rows=250 width=52) (actual time=0.034..0.185 rows=10.00 loops=1)
+        Merge Cond: (u.id = o.user_id)
+        Buffers: shared hit=471
+        ->  Index Scan using users_pkey on users u  (cost=0.28..62.28 rows=1200 width=52) (actual time=0.008..0.023 rows=143.00 loops=1)
+              Index Searches: 1
+              Buffers: shared hit=4
+        ->  Index Scan using idx_orders_user on orders o  (cost=0.28..567.29 rows=250 width=8) (actual time=0.014..0.146 rows=24.00 loops=1)
+              Filter: (status = 'cancelled'::text)
+              Rows Removed by Filter: 440
+              Index Searches: 1
+              Buffers: shared hit=467
+Planning:
+  Buffers: shared hit=10
+Planning Time: 0.275 ms
+Execution Time: 0.207 ms
+```
+
+Пользователи и их заказы читаются `Index Scan` в порядке `id` и `user_id` и сопоставляются `Merge Semi Join`. Индекс `idx_orders_user` не содержит статуса заказа, поэтому из 464 прочитанных заказов 440 отбрасываются фильтром `status = 'cancelled'`; на это уходит 467 обращений к страницам. Время выполнения — 0.207 мс.
