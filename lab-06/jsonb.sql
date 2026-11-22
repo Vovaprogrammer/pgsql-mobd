@@ -40,3 +40,21 @@ SELECT id, title, attributes
 FROM products
 WHERE id IN (1, 4, 7, 10, 13, 16)
 ORDER BY id;
+
+-- Пункт 2. Извлечение полей: -> возвращает значение как JSONB, ->> — как
+-- текст. Книги от 460 страниц: у товаров без ключа pages ->> даёт NULL.
+SELECT id, title,
+       attributes -> 'author'         AS author_json,
+       attributes ->> 'author'        AS author,
+       (attributes ->> 'pages')::int  AS pages
+FROM products
+WHERE (attributes ->> 'pages')::int >= 460
+ORDER BY id
+LIMIT 5;
+
+-- Фильтрация по вхождению фрагмента: книги Булгакова в твёрдом переплёте.
+SELECT id, title, attributes
+FROM products
+WHERE attributes @> '{"author": "М. Булгаков", "cover": "hard"}'
+ORDER BY id
+LIMIT 5;
